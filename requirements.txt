@@ -1,0 +1,15 @@
+# Media Analysis and Compression Tools
+# Python dependencies for photo/video processing
+
+# Image processing
+Pillow>=10.0.0
+pillow-heif>=0.13.0
+
+# YAML configuration support
+PyYAML>=6.0
+
+# Note: ffmpeg and ffprobe are system dependencies
+# Install with:
+#   macOS: brew install ffmpeg
+#   Linux: sudo apt-get install ffmpeg
+#   Windows: Download from https://ffmpeg.org/download.html

@@ -9,6 +9,7 @@ Converted/
 # Log files
 *.log
 *.txt
+!requirements.txt
 
 # Catalog and config (user-specific)
 media_catalog.csv
