@@ -159,6 +159,20 @@ process_log.txt            # Detailed log
 
 iCloud Photos sorts by EXIF date, not file system date. The scripts preserve all EXIF metadata including dates, so photos import in the correct chronological order.
 
+For videos this needs care: ffmpeg drops QuickTime creation dates on
+re-encode, and `exiftool -All:All` cannot write most QuickTime groups.
+`metadata_utils.py` holds the shared fix: an explicit
+`-metadata creation_time` for ffmpeg plus a tag-specific exiftool pass
+(`QuickTime:CreateDate`, `Keys:CreationDate`, GPS, device), used by both
+`process.py` and `repair_video_dates.py` (which retrofits dates onto
+videos converted by older versions that lost them). `reconcile.py`
+audits sources against converted output; `consolidate.py` merges an
+icloudpd download into the archive, classifying compressed re-uploads
+apart from true new originals.
+
+Note: run these from this repository. Loose copies of the scripts at the
+drive root are deprecated.
+
 Modern phone cameras create huge files (3-5MB photos, 50+MB videos). Most of that quality is wasted on screens. Downsampling 4K photos to 2K and re-encoding videos with better compression saves massive space with minimal visible quality loss.
 
 ## License

@@ -15,6 +15,12 @@ from datetime import datetime
 from PIL import Image
 import pillow_heif
 
+from metadata_utils import (
+    copy_video_metadata,
+    read_video_dates,
+    set_file_times,
+)
+
 # Register HEIF opener with Pillow
 pillow_heif.register_heif_opener()
 
@@ -177,12 +183,13 @@ def process_image(input_path, output_path, strategy, logger):
 
             img.save(output_path, format=strategy['output_format'], **save_params)
 
-        # Copy EXIF metadata from original using exiftool
+        # Copy EXIF/GPS metadata from original using exiftool.
+        # Explicit groups: -All:All silently fails to write many of them.
         try:
             cmd = [
                 'exiftool',
                 '-TagsFromFile', input_path,
-                '-All:All',
+                '-EXIF:all', '-GPS:all', '-ICC_Profile',
                 '-overwrite_original',
                 output_path
             ]
@@ -196,6 +203,25 @@ def process_image(input_path, output_path, strategy, logger):
         except Exception as e:
             logger.log(f"  Warning: EXIF copy failed: {str(e)[:100]}", "WARN")
 
+        # File times = capture date, so date-sorting works even where
+        # a consumer ignores EXIF.
+        try:
+            cmd = ['exiftool', '-api', 'QuickTimeUTC=1', '-j',
+                   '-DateTimeOriginal', '-OffsetTimeOriginal', input_path]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                import json as _json
+                from metadata_utils import parse_exiftool_date
+                data = _json.loads(result.stdout)[0]
+                raw = str(data.get('DateTimeOriginal', ''))
+                offset = str(data.get('OffsetTimeOriginal', ''))
+                capture = parse_exiftool_date(
+                    raw + offset if offset.startswith(('+', '-')) else raw)
+                if capture:
+                    set_file_times(output_path, capture)
+        except Exception as e:
+            logger.log(f"  Warning: could not set file times: {str(e)[:100]}", "WARN")
+
         return True, None
 
     except Exception as e:
@@ -203,12 +229,30 @@ def process_image(input_path, output_path, strategy, logger):
 
 
 def process_video(input_path, output_path, strategy, logger):
-    """Process a video file"""
+    """Process a video file, preserving creation dates and GPS.
+
+    ffmpeg drops QuickTime creation dates on re-encode unless passed
+    explicitly, and the MP4 muxer only honours a plain
+    '-metadata creation_time'. The exiftool pass afterwards writes the
+    Keys/Track/Media variants that Photos.app reads.
+    """
     try:
+        # Read the source's capture date first; refuse to silently
+        # produce an undated file if the source has a date.
+        src_tags = read_video_dates(input_path)
+        capture = src_tags.get('best_datetime') if src_tags else None
+        if not capture:
+            logger.log(f"  Warning: source has no creation date", "WARN")
+
         cmd = ['ffmpeg', '-i', input_path, '-y']
 
         # Copy all metadata streams
         cmd.extend(['-map_metadata', '0'])
+
+        if capture:
+            from datetime import timezone as _tz
+            iso_utc = capture.astimezone(_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            cmd.extend(['-metadata', f'creation_time={iso_utc}'])
 
         # Video codec
         cmd.extend(['-c:v', strategy.get('video_codec', 'libx264')])
@@ -227,8 +271,7 @@ def process_video(input_path, output_path, strategy, logger):
         cmd.extend(['-c:a', strategy.get('audio_codec', 'aac')])
         cmd.extend(['-b:a', '128k'])
 
-        # Preserve creation time and other metadata
-        cmd.extend(['-movflags', 'use_metadata_tags'])
+        cmd.extend(['-movflags', '+faststart'])
 
         # Output
         cmd.append(output_path)
@@ -245,20 +288,20 @@ def process_video(input_path, output_path, strategy, logger):
         if result.returncode != 0:
             return False, f"ffmpeg error: {result.stderr[-500:]}"  # Last 500 chars of error
 
-        # Additional metadata copy with exiftool for extra safety
-        try:
-            cmd = [
-                'exiftool',
-                '-TagsFromFile', input_path,
-                '-All:All',
-                '-overwrite_original',
-                output_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                logger.log(f"  Video metadata copied with exiftool")
-        except Exception as e:
-            logger.log(f"  Warning: exiftool metadata copy failed: {str(e)[:100]}", "WARN")
+        # Write the QuickTime/Keys date, GPS and device tags explicitly.
+        ok, err = copy_video_metadata(input_path, output_path,
+                                      keep_backup=False)
+        if ok:
+            logger.log(f"  Video dates/GPS copied with exiftool")
+        else:
+            logger.log(f"  Warning: exiftool metadata copy failed: {err}", "WARN")
+
+        # Verify the output actually carries a date before declaring success.
+        if capture:
+            dst_tags = read_video_dates(output_path)
+            if not dst_tags or dst_tags.get('best_datetime') != capture:
+                return False, "creation date missing or wrong on output"
+            set_file_times(output_path, capture)
 
         return True, None
 
