@@ -255,7 +255,13 @@ def process_video(input_path, output_path, strategy, logger):
             cmd.extend(['-metadata', f'creation_time={iso_utc}'])
 
         # Video codec
-        cmd.extend(['-c:v', strategy.get('video_codec', 'libx264')])
+        video_codec = strategy.get('video_codec', 'libx264')
+        cmd.extend(['-c:v', video_codec])
+
+        # Apple software (Photos, QuickTime) rejects HEVC in mp4 unless the
+        # sample entry is tagged hvc1 (ffmpeg defaults to hev1).
+        if video_codec in ('libx265', 'hevc_videotoolbox'):
+            cmd.extend(['-tag:v', 'hvc1'])
 
         # CRF (quality)
         cmd.extend(['-crf', str(strategy.get('crf', 23))])
