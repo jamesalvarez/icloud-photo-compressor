@@ -284,11 +284,17 @@ def process_video(input_path, output_path, strategy, logger):
 
         logger.log(f"  Running ffmpeg with metadata preservation")
 
+        # Long videos need proportionally long encodes; a flat 5-minute cap
+        # silently truncated every clip whose encode ran over it.
+        from metadata_utils import ffprobe_duration
+        duration = ffprobe_duration(input_path) or 0
+        timeout_s = max(600, int(duration * 20))
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout per video
+            timeout=timeout_s
         )
 
         if result.returncode != 0:
